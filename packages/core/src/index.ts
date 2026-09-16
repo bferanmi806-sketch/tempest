@@ -137,6 +137,11 @@ export interface RpcParams {
   "permission.decide":  { sessionId: string; decision: "approve" | "deny" };
 
   "protocol.hello":     { mobile: number; minCompatibleDesktop: number };
+
+  /** Mobile hands over its Expo push token so the desktop can wake it on
+   *  agent `waiting` transitions. Fire-and-forget: pairing still works if
+   *  the phone can't get a token (simulator, denied perms, Expo Go). */
+  "push.register":      { token: string; platform: string };
 }
 
 export interface RpcResult {
@@ -168,6 +173,8 @@ export interface RpcResult {
   "permission.decide":  void;
 
   "protocol.hello":     { desktop: number; minCompatibleMobile: number };
+
+  "push.register":      void;
 }
 
 export type RpcMethod = keyof RpcParams & keyof RpcResult;

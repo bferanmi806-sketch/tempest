@@ -13,6 +13,7 @@ import { ThemeProvider, useTheme } from './themes';
 import Pair from './screens/Pair';
 import Connected from './screens/Connected';
 import DeviceList from './screens/DeviceList';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const DEV = process.env.EXPO_PUBLIC_DEV === 'true';
 const PAIRINGS_KEY = 'pairings';
@@ -189,6 +190,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      <ErrorBoundary>
       <ThemeProvider initial="dark">
         {screen === 'welcome' && <Welcome onGetStarted={goPair} />}
         {screen === 'pair' && (
@@ -213,6 +215,7 @@ export default function App() {
           />
         )}
       </ThemeProvider>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

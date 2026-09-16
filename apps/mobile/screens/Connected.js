@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { TerminalSquare, Bot, Monitor, Menu, Plus, LogOut, Bell, CheckCircle2 } from 'lucide-react-native';
 import { startRpcClient } from '../lib/rpc';
+import { getPushToken } from '../lib/push';
 import SessionScreen from './SessionScreen';
 
 // Bundled agent SVGs — mirror of desktop's src/assets/agent-icons + the
@@ -171,6 +172,15 @@ export default function Connected({ pairing, onUnpair, onBack }) {
       if (cancelled) return;
       setVersionBlock(block);
       if (block) return; // don't subscribe on a mismatch
+      // Register push token so desktop can wake us on agent `waiting`
+      // transitions. Fire-and-forget: pairing works fine without it.
+      getPushToken().then((r) => {
+        if (cancelled || !r) return;
+        client.request('push.register', r).catch((e) => {
+          // Older desktop without push.register — safe to ignore.
+          console.log('[push] register failed', e?.message);
+        });
+      });
       client.request('session.list', {})
         .then((r) => {
           if (cancelled) return;

@@ -108,6 +108,7 @@ export interface RpcParams {
   "permission.decide":  { sessionId: string; decision: "approve" | "deny" };
 
   "protocol.hello":     { mobile: number; minCompatibleDesktop: number };
+  "push.register":      { token: string; platform: string };
 }
 
 export interface RpcResult {
@@ -139,6 +140,7 @@ export interface RpcResult {
   "permission.decide":  void;
 
   "protocol.hello":     { desktop: number; minCompatibleMobile: number };
+  "push.register":      void;
 }
 
 export type RpcMethod = keyof RpcParams & keyof RpcResult;

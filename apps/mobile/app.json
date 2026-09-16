@@ -40,6 +40,7 @@
           "cameraPermission": "Tempest uses the camera to scan the pairing QR shown by your desktop."
         }
       ],
+      "expo-notifications",
       "expo-status-bar"
     ],
     "extra": {

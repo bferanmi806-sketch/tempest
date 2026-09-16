@@ -11,7 +11,7 @@ export function registerBridge(pairingId: string, ws: WebSocket, sessionKey: Uin
   // healthy run, but a repeated pair from the same phone shouldn't leak).
   bridges.get(pairingId)?.close();
 
-  const b = attachBridge(ws, sessionKey);
+  const b = attachBridge(ws, sessionKey, pairingId);
   bridges.set(pairingId, b);
 
   // When the ws dies, tear down the bridge — otherwise the RpcPeer's store

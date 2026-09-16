@@ -1,6 +1,7 @@
 // Mobile RPC client — dial the tunnel with role=phone, run RpcPeer over the
 // paired session key, auto-reconnect with backoff while the pairing is live.
 
+import { AppState } from 'react-native';
 import { RpcPeer, wsChannel, makeBackoff } from '@tempest/transport';
 import { b64 } from '@tempest/crypto';
 import { takeWarmSocket } from './warmSocket';
@@ -164,8 +165,21 @@ export function startRpcClient({ relayUrl, sessionId, sessionKeyB64, onState }) 
     };
   };
 
+  // iOS suspends WebSockets when the app is backgrounded; on resume the
+  // socket often still reports readyState=OPEN but is silently dead. Trust
+  // nothing on foreground — force close, let the existing onclose path
+  // reconnect (backoff reset so it fires immediately).
+  const onAppStateChange = (state) => {
+    if (disposed || state !== 'active') return;
+    backoff.reset();
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; dial(); return; }
+    if (ws) { try { ws.close(); } catch {} }
+  };
+  const appStateSub = AppState.addEventListener('change', onAppStateChange);
+
   const close = () => {
     disposed = true;
+    appStateSub?.remove?.();
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
     clearTimers();
     peer?.close();

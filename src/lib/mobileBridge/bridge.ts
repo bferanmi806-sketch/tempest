@@ -23,6 +23,7 @@ import { subscribeAllWorkStateChanges, clearWorkState, getWorkState } from "../.
 import { getWorkspaceApi } from "./workspaceApi";
 import { sessionManager } from "../../store/sessionManager";
 import { addController, removeController, onTakeBack } from "../../store/mobileControlledSessions";
+import { registerToken, sendPush } from "./pushSender";
 
 export interface AttachedBridge {
   peer: RpcPeer;
@@ -34,7 +35,7 @@ export interface AttachedBridge {
  * agent-protocol handlers. Returns the peer + a close() that tears both
  * halves down.
  */
-export function attachBridge(ws: WebSocket, sessionKey: Uint8Array): AttachedBridge {
+export function attachBridge(ws: WebSocket, sessionKey: Uint8Array, pairingId?: string): AttachedBridge {
   const channel = wsChannel(ws);
   const peer = new RpcPeer(channel, sessionKey);
 
@@ -177,6 +178,14 @@ export function attachBridge(ws: WebSocket, sessionKey: Uint8Array): AttachedBri
     peer.emit("session.controllerYielded", { sessionId });
   });
 
+  // Phone hands over its Expo push token after protocol.hello. We stash it
+  // per pairing so the desktop can wake a backgrounded phone when a session
+  // transitions to `waiting`. Missing pairingId = pre-registry test peer; skip.
+  peer.handle("push.register", async ({ token, platform }) => {
+    if (!pairingId || typeof token !== "string") return;
+    registerToken(pairingId, token, String(platform || ""));
+  });
+
   // ponytail: permission.decide waits on Phase 4 (agent-hook approve/deny
   // plumbing lands with Expo Push). Until then, mobile gets a clean error.
   peer.handle("permission.decide", async () => { throw new Error("not_implemented:permission.decide"); });
@@ -190,6 +199,9 @@ export function attachBridge(ws: WebSocket, sessionKey: Uint8Array): AttachedBri
   // workState + queue mutations pushes one frame per session, not five.
   const dirty = new Set<string>();
   let flushing = false;
+  // Track last emitted status per session so we can detect
+  // non-waiting → waiting transitions and fire an Expo push.
+  const lastStatus = new Map<string, string>();
   const scheduleFlush = () => {
     if (flushing) return;
     flushing = true;
@@ -202,9 +214,19 @@ export function attachBridge(ws: WebSocket, sessionKey: Uint8Array): AttachedBri
         if (summary) {
           console.log(`[bridge] emit session.updated id=${id.slice(0, 8)} status=${summary.status} closed=${summary.closed}`);
           peer.emit("session.updated", summary);
+          const prev = lastStatus.get(id);
+          lastStatus.set(id, summary.status);
+          if (summary.status === "waiting" && prev !== "waiting") {
+            sendPush({
+              title: summary.name || "Tempest",
+              body: "Agent is waiting for your input.",
+              data: { sessionId: id, kind: "waiting" },
+            });
+          }
         } else {
           console.log(`[bridge] emit session.removed id=${id.slice(0, 8)} (projector null)`);
           peer.emit("session.removed", { id });
+          lastStatus.delete(id);
         }
       }
     });
