@@ -8,6 +8,7 @@ import { loadSessions } from "./store/sessions";
 import { loadProjects } from "./store/openProjects";
 import { loadRecents } from "./store/recents";
 import { loadTabs } from "./store/tabs";
+import { terminalRendererPolicy } from "./lib/terminalRenderer";
 
 // StrictMode intentionally removed — it double-invokes effects which causes
 // PTY sessions to spawn twice on mount.
@@ -17,6 +18,7 @@ import { loadTabs } from "./store/tabs";
   // these are independent.
   await Promise.all([
     loadAppState(), loadSessions(), loadProjects(), loadRecents(), loadTabs(),
+    terminalRendererPolicy.initialize(),
   ]);
   // AGENT_CONFIGS was built at module load with an empty runtime state; now
   // that customAgents is hydrated, rebuild so user-added entries appear.

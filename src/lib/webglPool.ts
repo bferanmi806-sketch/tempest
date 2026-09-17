@@ -1,5 +1,6 @@
 import { WebglAddon } from "@xterm/addon-webgl";
 import type { Terminal } from "@xterm/xterm";
+import { terminalRendererPolicy } from "./terminalRenderer";
 
 // Maximum simultaneous WebGL contexts. Chromium/WebView2 caps at ~16; staying at 6
 // leaves headroom for DevTools and other pages and ensures visible panes always get GPU rendering.
@@ -9,6 +10,7 @@ class WebGLPool {
   private active = new Map<string, WebglAddon>();
 
   acquire(term: Terminal, sessionId: string): void {
+    if (!terminalRendererPolicy.allowsWebgl()) return;
     if (this.active.has(sessionId)) return;
     if (this.active.size >= POOL_SIZE) return; // graceful degradation to canvas renderer
     try {
