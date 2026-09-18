@@ -1,5 +1,5 @@
-import { cpSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'fs'
-import { join, dirname } from 'path'
+import { cpSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, realpathSync } from 'fs'
+import { join, dirname, relative, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { pruneCruft } from './prune-bundle.mjs'
 
@@ -10,6 +10,103 @@ const dest = join(root, 'src-tauri', 'resources', 'atlas')
 const destModules = join(dest, 'node_modules')
 
 if (!existsSync(src)) process.exit(0)
+
+// Runtime files the staged bundle must contain, relative to the Atlas
+// package root. These mirror the paths the Rust backend resolves at
+// runtime (dist/mcp/server-entry.js) plus the assets its loader needs
+// alongside the entry point. Checked before staging (fail fast on a bad
+// source tree) and again after pruning (fail fast on a bad prune), so a
+// broken bundle can never silently reach the installer.
+const REQUIRED_RUNTIME_FILES = [
+  join('dist', 'mcp', 'server-entry.js'),
+  join('dist', 'index.js'),
+  join('dist', 'db', 'schema.sql'),
+]
+const REQUIRED_RUNTIME_PACKAGES = ['@usetempest/atlas', '@xenova/transformers', 'onnxruntime-node']
+
+function fail(message) {
+  console.error(`[install-atlas] ERROR: ${message}`)
+  process.exit(1)
+}
+
+/** True when `dir` holds at least one .wasm runtime asset. */
+function hasWasmAssets(dir) {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (hasWasmAssets(full)) return true
+    } else if (entry.name.endsWith('.wasm')) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Assert the resolved Atlas source is a real published package — not a
+ * symlink/junction back to the local packages/atlas checkout (which has no
+ * committed dist/ and is never built by root `npm ci`) — and that its
+ * compiled entry points exist. Exits non-zero otherwise.
+ */
+function verifySource() {
+  const srcReal = realpathSync(src)
+  const rel = relative(root, srcReal)
+  if (rel === join('packages', 'atlas') || rel.startsWith(join('packages', 'atlas') + sep)) {
+    fail(
+      `node_modules/@usetempest/atlas resolves to the local source checkout (${srcReal}), ` +
+        `which ships no dist/. The root package-lock.json must resolve @usetempest/atlas from ` +
+        `the npm registry (see issue #117); regenerate it and reinstall.`,
+    )
+  }
+  const missing = REQUIRED_RUNTIME_FILES.filter((relPath) => !existsSync(join(srcReal, relPath)))
+  if (missing.length > 0) {
+    fail(
+      `Atlas source is missing compiled output: ${missing.join(', ')} (resolved from ${srcReal}). ` +
+        `The published @usetempest/atlas package must contain dist/; refusing to stage a bundle ` +
+        `with no MCP entry point.`,
+    )
+  }
+  if (!hasWasmAssets(join(srcReal, 'dist', 'extraction', 'wasm'))) {
+    fail(
+      `Atlas source has no .wasm assets under dist/extraction/wasm (resolved from ${srcReal}). ` +
+        `Refusing to stage a bundle that cannot run extraction.`,
+    )
+  }
+}
+
+/**
+ * Assert the staged (and pruned) bundle still contains every runtime file
+ * and package the app needs. Exits non-zero on the first gap.
+ */
+function verifyStaged() {
+  const atlasRoot = join(destModules, '@usetempest', 'atlas')
+  const missingFiles = REQUIRED_RUNTIME_FILES.filter(
+    (relPath) => !existsSync(join(atlasRoot, relPath)),
+  )
+  if (missingFiles.length > 0) {
+    fail(
+      `staged Atlas bundle is missing runtime files: ${missingFiles.join(', ')}. ` +
+        `Staging or pruning dropped them; refusing to leave a broken bundle behind.`,
+    )
+  }
+  if (!hasWasmAssets(join(atlasRoot, 'dist', 'extraction', 'wasm'))) {
+    fail('staged Atlas bundle has no .wasm assets under dist/extraction/wasm; pruning must not remove them.')
+  }
+  const missingPackages = REQUIRED_RUNTIME_PACKAGES.filter(
+    (pkg) => !existsSync(join(destModules, ...pkg.split('/'), 'package.json')),
+  )
+  if (missingPackages.length > 0) {
+    fail(`staged Atlas bundle is missing runtime packages: ${missingPackages.join(', ')}.`)
+  }
+}
+
+verifySource()
 
 rmSync(dest, { recursive: true, force: true })
 mkdirSync(dest, { recursive: true })
@@ -126,5 +223,7 @@ if (existsSync(sharpNested)) {
       'module.exports.default = stub;\n'
   )
 }
+
+verifyStaged()
 
 console.log('Atlas staged → src-tauri/resources/atlas/')
