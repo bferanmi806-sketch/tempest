@@ -49,19 +49,23 @@ function hasWasmAssets(dir) {
 }
 
 /**
- * Assert the resolved Atlas source is a real published package — not a
- * symlink/junction back to the local packages/atlas checkout (which has no
- * committed dist/ and is never built by root `npm ci`) — and that its
- * compiled entry points exist. Exits non-zero otherwise.
+ * Assert the resolved Atlas source is complete enough to stage: compiled
+ * entry points plus extraction assets must exist. A checkout link to the
+ * local packages/atlas tree is allowed for intentional local integration
+ * testing — but only when it is fully built; an unbuilt local tree fails
+ * here with a clear error instead of producing a broken bundle (issue #117).
+ * Official installs/releases pin the published package via package-lock.json
+ * (enforced by src/atlas/atlas-release.check.ts), so they never hit the
+ * local path. Exits non-zero when anything required is missing.
  */
 function verifySource() {
   const srcReal = realpathSync(src)
   const rel = relative(root, srcReal)
   if (rel === join('packages', 'atlas') || rel.startsWith(join('packages', 'atlas') + sep)) {
-    fail(
-      `node_modules/@usetempest/atlas resolves to the local source checkout (${srcReal}), ` +
-        `which ships no dist/. The root package-lock.json must resolve @usetempest/atlas from ` +
-        `the npm registry (see issue #117); regenerate it and reinstall.`,
+    console.warn(
+      `[install-atlas] WARN: staging from the local packages/atlas checkout (${srcReal}), ` +
+        `not the published package. Official releases must resolve @usetempest/atlas from ` +
+        `the npm registry; see issue #117.`,
     )
   }
   const missing = REQUIRED_RUNTIME_FILES.filter((relPath) => !existsSync(join(srcReal, relPath)))
