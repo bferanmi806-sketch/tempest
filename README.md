@@ -127,7 +127,7 @@ npm run dev
 
 ## Partners
 
-**[WarpLLM](https://github.com/warpllm/warpllm)** — official partner. A hyper-fast, robust AI gateway built for planet scale by the community. We plan to eventually integrate WarpLLM into Tempest's stack.
+**[WarpLLM](https://github.com/warpllm/warpllm)** — official partner. A high-performance, community-built AI gateway engineered for reliability at scale. We plan to eventually integrate WarpLLM into Tempest's stack.
 
 ## Star History
 
