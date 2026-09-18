@@ -125,6 +125,10 @@ npm install
 npm run dev
 ```
 
+## Partners
+
+**[WarpLLM](https://github.com/warpllm/warpllm)** — official partner. A hyper-fast, robust AI gateway built for planet scale by the community. We plan to eventually integrate WarpLLM into Tempest's stack.
+
 ## Star History
 
 [![Star Trail](https://star-trail.fun/api/chart/tempestai-dev/tempest)](https://star-trail.fun/tempestai-dev/tempest)
