@@ -20,6 +20,7 @@ mod service_proxy;
 mod tasks;
 mod tasks_store;
 mod warp_bridge;
+mod wsl;
 
 /// Managed slug → dev-server-port map, read by the reverse proxy in
 /// `service_proxy.rs` and written by `register_service_route`. The bool is
@@ -4723,6 +4724,7 @@ pub fn run() {
             pairing_relay::stop_pairing_relay,
             open_devtools,
             get_hostname,
+            wsl::is_wsl,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
