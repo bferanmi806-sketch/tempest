@@ -8,6 +8,12 @@ import cursorSrc from "../assets/agent-icons/cursor.svg";
 import gooseSrc from "../assets/agent-icons/goose.svg";
 import codexSrc from "../assets/agent-icons/codex.svg";
 import antigravitySrc from "../assets/agent-icons/antigravity.svg";
+import hermesSrc from "../assets/agent-icons/hermes.svg";
+import piSrc from "../assets/agent-icons/pi.svg";
+import ampSrc from "../assets/agent-icons/amp.svg";
+import fxSrc from "../assets/agent-icons/fx.svg";
+import qwenSrc from "../assets/agent-icons/qwen.svg";
+import grokSrc from "../assets/agent-icons/grok.svg";
 import bundledManifest from "../../config/agents.json";
 import { mergeAgents, sanitizeManifestAgents, sanitizeCachedPatches, sanitizeCustomAgents, type AgentConfig, type RemotePatch } from "./agentManifest";
 import { getRuntimeState, setRuntimeState } from "./runtimeState";
@@ -37,6 +43,12 @@ const ICON_ASSETS: Record<string, string> = {
   gemini: geminiCliSrc,
   goose: gooseSrc,
   opencode: opencodeSrc,
+  "hermes.svg": hermesSrc,
+  "pi.svg": piSrc,
+  "amp.svg": ampSrc,
+  "fx.svg": fxSrc,
+  "qwen.svg": qwenSrc,
+  "grok.svg": grokSrc,
 };
 
 // Icons that aren't bundled are served from Tempest's OWN repo via jsDelivr —
