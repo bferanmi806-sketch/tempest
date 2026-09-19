@@ -51,33 +51,27 @@ export interface RestoreController {
 export function createRestoreController(deps: RestoreControllerDeps): RestoreController {
   let lastSent: PtyDims | null = null;
   let fitPending = false;
-  let frameIds: number[] = [];
+  // Only pending frames are retained: each id is dropped as its callback
+  // fires, so cancellation touches live callbacks and the set cannot grow
+  // across the mount's lifetime.
+  const pendingFrames = new Set<number>();
   let disposed = false;
   // Latched while the page is hidden; consumed once by the next focus that
   // schedules recovery. A visible event arriving first must not clear it.
   let wasHidden = false;
 
-  function track(id: number): void {
-    frameIds.push(id);
+  function queueFrame(fn: () => void): void {
+    if (disposed) return;
+    const id = deps.frames.requestFrame(() => {
+      pendingFrames.delete(id);
+      if (disposed) return;
+      fn();
+    });
+    pendingFrames.add(id);
   }
 
-  function frames(fn: () => void, double: boolean): void {
-    if (disposed) return;
-    track(
-      deps.frames.requestFrame(() => {
-        if (double) {
-          track(
-            deps.frames.requestFrame(() => {
-              if (disposed) return;
-              fn();
-            }),
-          );
-          return;
-        }
-        if (disposed) return;
-        fn();
-      }),
-    );
+  function queueDoubleFrame(fn: () => void): void {
+    queueFrame(() => queueFrame(fn));
   }
 
   function sendResize(dims: PtyDims): void {
@@ -105,19 +99,19 @@ export function createRestoreController(deps: RestoreControllerDeps): RestoreCon
   function scheduleFit(): void {
     if (disposed || fitPending) return;
     fitPending = true;
-    frames(() => {
+    queueFrame(() => {
       fitPending = false;
       fitNow();
-    }, false);
+    });
   }
 
   function scheduleRestoreFit(): void {
     if (disposed || fitPending) return;
     fitPending = true;
-    frames(() => {
+    queueDoubleFrame(() => {
       fitPending = false;
       fitNow();
-    }, true);
+    });
   }
 
   return {
@@ -130,7 +124,7 @@ export function createRestoreController(deps: RestoreControllerDeps): RestoreCon
       scheduleRestoreFit();
       if (shouldFullRefresh(wasHidden)) {
         // Refresh in its own frame chain so it lands after the reflow.
-        frames(() => deps.refreshAll(), true);
+        queueDoubleFrame(() => deps.refreshAll());
       }
       wasHidden = false;
     },
@@ -150,14 +144,14 @@ export function createRestoreController(deps: RestoreControllerDeps): RestoreCon
     dispose(): void {
       disposed = true;
       fitPending = false;
-      for (const id of frameIds) {
+      for (const id of pendingFrames) {
         try {
           deps.frames.cancelFrame(id);
         } catch {
           // Ignore — a fake scheduler in checks may throw on unknown ids.
         }
       }
-      frameIds = [];
+      pendingFrames.clear();
     },
   };
 }

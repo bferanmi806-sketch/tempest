@@ -37,6 +37,7 @@ interface Fake {
   refreshes: number;
   acquires: number;
   rejectNextSend: boolean;
+  sendImpl: ((dims: { rows: number; cols: number }) => unknown) | null;
   frames: Array<() => void>;
   cancelled: number[];
   nextId: number;
@@ -51,6 +52,7 @@ function makeFake(): Fake {
     refreshes: 0,
     acquires: 0,
     rejectNextSend: false,
+    sendImpl: null,
     frames: [],
     cancelled: [],
     nextId: 1,
@@ -65,6 +67,7 @@ function makeController(fake: Fake) {
     },
     sendResize: (dims) => {
       fake.sends.push({ ...dims });
+      if (fake.sendImpl) return fake.sendImpl(dims);
       return fake.rejectNextSend
         ? Promise.reject(new Error("pty gone"))
         : Promise.resolve();
@@ -151,6 +154,35 @@ function flush(fake: Fake) {
   fake.dims = { rows: 31, cols: 80 };
   controller.fitNow();
   assert.equal(fake.sends.length, 4);
+}
+
+// Deferred failure: resize A stays pending while B succeeds, then A rejects.
+// B's cached dimensions must survive the stale failure.
+{
+  const fake = makeFake();
+  const controller = makeController(fake);
+  let rejectA!: (reason?: unknown) => void;
+  let firstSend = true;
+  fake.sendImpl = () => {
+    if (firstSend) {
+      firstSend = false;
+      return new Promise((_, reject) => { rejectA = reject; });
+    }
+    return Promise.resolve();
+  };
+  fake.dims = { rows: 24, cols: 80 };
+  controller.fitNow();
+  assert.equal(fake.sends.length, 1, "resize A dispatched and pending");
+  fake.dims = { rows: 30, cols: 80 };
+  controller.fitNow();
+  assert.equal(fake.sends.length, 2, "resize B dispatched and cached");
+  rejectA(new Error("pty gone"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.fitNow();
+  assert.equal(fake.sends.length, 2, "stale failure of A must not clobber B");
+  fake.dims = { rows: 31, cols: 80 };
+  controller.fitNow();
+  assert.equal(fake.sends.length, 3, "newer changes still send after the stale failure");
 }
 
 // Mobile handoff: acquisition invalidates the cache so takeback reasserts.
