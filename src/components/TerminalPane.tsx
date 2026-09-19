@@ -12,7 +12,7 @@ import { getSettings, useSettings } from "../store/appSettings";
 import { getBindings, matchesEvent } from "../store/keybindings";
 import { sessionManager } from "../store/sessionManager";
 import { webglPool } from "../lib/webglPool";
-import { createFitScheduler, shouldFullRefresh, shouldSendResize } from "../lib/terminalFocusPolicy";
+import { createRestoreController, type RestoreController } from "../lib/terminalRestore";
 import { useIsMobileControlled, takeBack, isControlled } from "../store/mobileControlledSessions";
 import "@xterm/xterm/css/xterm.css";
 import "./TerminalPane.css";
@@ -65,15 +65,9 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
   const fitAddonRef = useRef<FitAddon | null>(null);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  // Last PTY dims actually sent backend-side, tagged with their session so a
-  // reused pane never suppresses the first resize of a new session. Null
-  // forces the next fit to reassert (initial fit, mobile handoff).
-  const lastSentSizeRef = useRef<{ rows: number; cols: number; sessionId: string } | null>(null);
-  // Coalesces the restore-path fit callbacks (focus + unhide + relayout).
-  const fitSchedulerRef = useRef(createFitScheduler());
-  // True while the page is hidden; consumed once by the next focus to decide
-  // whether rendered rows may have been dropped (minimize/tab switch).
-  const wasHiddenRef = useRef(false);
+  // Restore orchestration for this mount (fit/IPC/repaint scheduling with
+  // lifecycle guards). Recreated per sessionId by the mount effect below.
+  const restoreRef = useRef<RestoreController | null>(null);
   // Stable reference to the data callback so attach/detach always use the same function identity.
   const onDataRef = useRef<(data: string) => void>(() => {});
   const [searchOpen, setSearchOpen] = useState(false);
@@ -86,41 +80,6 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     clear: () => { termRef.current?.reset(); },
   }), []);
 
-  // Single fit path: reflow xterm to the container AND tell the PTY the new size.
-  // Fitting the frontend without resizing the backend desyncs cols/rows and makes
-  // the shell wrap at the wrong column — the source of terminal "glitching".
-  // The backend IPC is skipped when dims are unchanged: a no-op resize still
-  // round-trips IPC plus a PTY resize and shell repaint on low-end systems.
-  const fitIfVisible = () => {
-    const c = containerRef.current;
-    const term = termRef.current;
-    if (!term || !c || c.offsetWidth === 0 || c.offsetHeight === 0) return;
-    fitAddonRef.current?.fit();
-    // While a phone is driving this session, the PTY is sized to the phone's
-    // viewport. Refitting from the desktop here would clobber that — and the
-    // cache is cleared so takeback reasserts desktop dims.
-    if (isControlled(sessionId)) {
-      lastSentSizeRef.current = null;
-      return;
-    }
-    const current = { rows: term.rows, cols: term.cols };
-    const last = lastSentSizeRef.current;
-    const lastDims = last && last.sessionId === sessionId ? last : null;
-    if (!shouldSendResize(lastDims, current, false)) return;
-    lastSentSizeRef.current = { ...current, sessionId };
-    invoke("resize_pty", { sessionId, rows: current.rows, cols: current.cols }).catch(() => {});
-  };
-
-  // Coalesced restore fit: focus, unhide and relayout share one pending slot
-  // instead of stacking duplicate fit/IPC chains on the same frame window.
-  const scheduleRestoreFit = () => {
-    if (!fitSchedulerRef.current.claim()) return;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      fitSchedulerRef.current.release();
-      fitIfVisible();
-    }));
-  };
-
   // Hot-swap theme on existing terminal without touching the PTY session.
   useEffect(() => {
     if (termRef.current) termRef.current.options.theme = getTerminalTheme();
@@ -132,8 +91,10 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     const t = termRef.current;
     if (!t) return;
     t.options.disableStdin = readOnly || mobileControlled;
-    // When the phone lets go, snap back to desktop dims immediately.
-    if (!mobileControlled) requestAnimationFrame(fitIfVisible);
+    // On acquisition the backend dims belong to the phone: invalidate the
+    // cache so takeback reasserts desktop dims. On release, snap back now.
+    if (mobileControlled) restoreRef.current?.controlAcquired();
+    if (!mobileControlled) restoreRef.current?.scheduleFit();
   }, [mobileControlled, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Hot-swap terminal display settings without recreating the session.
@@ -145,7 +106,7 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     t.options.cursorStyle = settings.terminalCursorStyle;
     t.options.cursorBlink = settings.terminalCursorBlink;
     t.options.scrollback = settings.terminalScrollback;
-    requestAnimationFrame(fitIfVisible);
+    restoreRef.current?.scheduleFit();
   }, [settings.terminalFontSize, settings.terminalFontFamily, settings.terminalCursorStyle, settings.terminalCursorBlink, settings.terminalScrollback]);
 
   // Create terminal once per sessionId. Work-done detection, buffering, and channel
@@ -183,6 +144,38 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
 
     term.open(el);
 
+    // Restore orchestration for this mount: fit/IPC/repaint scheduling with
+    // lifecycle guards, so queued callbacks can never run against a remounted
+    // session. Recreated per sessionId with this effect.
+    const restore = createRestoreController({
+      fit: () => {
+        const c = containerRef.current;
+        const t = termRef.current;
+        if (!t || !c || c.offsetWidth === 0 || c.offsetHeight === 0) return null;
+        // Fitting the frontend without resizing the backend desyncs cols/rows
+        // and makes the shell wrap at the wrong column — the source of
+        // terminal "glitching". The controller skips the backend IPC when dims
+        // are unchanged.
+        fitAddonRef.current?.fit();
+        return { rows: t.rows, cols: t.cols };
+      },
+      sendResize: (dims) => invoke("resize_pty", { sessionId, rows: dims.rows, cols: dims.cols }),
+      refreshAll: () => {
+        termRef.current?.refresh(0, (termRef.current?.rows ?? 1) - 1);
+      },
+      acquireRenderer: () => {
+        const t = termRef.current;
+        if (t) webglPool.acquire(t, sessionId);
+      },
+      isControlled: () => isControlled(sessionId),
+      frames: {
+        requestFrame: (fn) => requestAnimationFrame(fn),
+        cancelFrame: (id) => cancelAnimationFrame(id),
+      },
+    });
+    restoreRef.current?.dispose();
+    restoreRef.current = restore;
+
     // Register as a renderer with the Session Manager and replay any buffered output.
     // The Manager owns the Channel and runs work-done detection independently.
     const onData = (data: string) => term.write(data);
@@ -195,9 +188,8 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     // columns (gap on the right, jagged glyphs) until a later refit. fonts.ready
     // resolves immediately once loaded, so this is free on subsequent opens.
     // Two rAFs: first yields to layout, second reads committed dimensions.
-    document.fonts.ready.then(() =>
-      requestAnimationFrame(() => requestAnimationFrame(fitIfVisible)),
-    );
+    // Lifecycle-guarded: a remount before fonts resolve must not fit the new session.
+    document.fonts.ready.then(() => restore.scheduleRestoreFit());
 
     if (!readOnly) {
       term.onData((data) => {
@@ -219,7 +211,7 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     const observer = new ResizeObserver(() => {
       if (el.offsetWidth === 0 || el.offsetHeight === 0) return;
       if (resizeTimerRef.current !== null) clearTimeout(resizeTimerRef.current);
-      resizeTimerRef.current = setTimeout(fitIfVisible, 16);
+      resizeTimerRef.current = setTimeout(() => restoreRef.current?.fitNow(), 16);
     });
     observer.observe(el);
 
@@ -289,9 +281,8 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
       termRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
-      lastSentSizeRef.current = null;
-      fitSchedulerRef.current.release();
-      wasHiddenRef.current = false;
+      restore.dispose();
+      restoreRef.current = null;
       observer.disconnect();
       term.dispose();
     };
@@ -306,8 +297,7 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
     if (hidden) {
       webglPool.release(sessionId);
     } else {
-      webglPool.acquire(term, sessionId);
-      scheduleRestoreFit();
+      restoreRef.current?.restoreOnShow();
     }
   }, [hidden, sessionId]);
 
@@ -319,19 +309,11 @@ export const TerminalPane = memo(forwardRef<TerminalPaneHandle, Props>(function 
   // unchanged.
   useEffect(() => {
     const onVisibility = () => {
-      wasHiddenRef.current = document.hidden;
+      restoreRef.current?.noteVisibility(document.hidden);
     };
     const onFocus = () => {
-      const term = termRef.current;
-      if (!term || hidden) return;
-      webglPool.acquire(term, sessionId);
-      scheduleRestoreFit();
-      if (shouldFullRefresh(wasHiddenRef.current)) {
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          termRef.current?.refresh(0, (termRef.current?.rows ?? 1) - 1);
-        }));
-      }
-      wasHiddenRef.current = false;
+      if (!termRef.current || hidden) return;
+      restoreRef.current?.restoreOnFocus();
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
